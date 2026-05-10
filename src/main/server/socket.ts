@@ -1,6 +1,7 @@
 import { Server, Socket } from 'socket.io'
 import { getHudConfig } from './domains/huds/hud.routes'
 import { getActiveHudId } from './server'
+import { requestHudMatchRefresh } from './integrations/gsi'
 
 export const setupSockets = (io: Server) => {
   io.on('connection', (socket: Socket) => {
@@ -16,6 +17,7 @@ export const setupSockets = (io: Server) => {
         try {
           // Mark socket as a HUD so GSI updates can be filtered for it
           socket.join('huds')
+          requestHudMatchRefresh()
           const hudId = getActiveHudId() || hudName
           const config = await getHudConfig(hudId)
           socket.emit('hud_config', config)

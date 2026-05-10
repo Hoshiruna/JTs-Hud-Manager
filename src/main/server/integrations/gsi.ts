@@ -106,6 +106,13 @@ let playerOverrideByRawSteamId = new Map<string, Player>()
 export const getOverriddenPlayerBySteamId = (steamid: string): Player | null =>
   playerOverrideByRawSteamId.get(steamid) ?? null
 
+let pendingHudMatchRefreshes = 0
+let lastHudMatchRefreshMapName: string | null = null
+
+export const requestHudMatchRefresh = (): void => {
+  pendingHudMatchRefreshes = Math.max(pendingHudMatchRefreshes, 1)
+}
+
 let overwriteSettingCache = {
   expiresAt: 0,
   value: false
@@ -665,6 +672,17 @@ export const setupGSI = (io: Server) => {
       io.except('huds').emit('update', gsiData)
       // HUDs get filtered payload
       io.to('huds').emit('update', hudPayload)
+
+      const activeMapName = getShortMapName((hudPayload as any)?.map?.name)
+      const shouldRefreshHudMatch =
+        pendingHudMatchRefreshes > 0 ||
+        (activeMapName !== null && activeMapName !== lastHudMatchRefreshMapName)
+
+      if (shouldRefreshHudMatch) {
+        if (pendingHudMatchRefreshes > 0) pendingHudMatchRefreshes -= 1
+        lastHudMatchRefreshMapName = activeMapName
+        io.to('huds').emit('match')
+      }
 
       // CS2 expects a 200 OK so it doesn't throttle the GSI engine
       res.status(200).send('OK')
