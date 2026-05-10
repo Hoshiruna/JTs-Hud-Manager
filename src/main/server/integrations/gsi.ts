@@ -172,6 +172,16 @@ const getSideTeamIds = (match: Match, veto: Veto | null): Record<'CT' | 'T', str
   }
 }
 
+const getSideForTeamId = (
+  sideTeamIds: Record<'CT' | 'T', string | null>,
+  teamId: string | null
+): 'CT' | 'T' | null => {
+  if (!teamId) return null
+  if (sideTeamIds.CT === teamId) return 'CT'
+  if (sideTeamIds.T === teamId) return 'T'
+  return null
+}
+
 const getOverrideData = async (): Promise<GSIOverrideCache> => {
   const now = Date.now()
 
@@ -267,6 +277,8 @@ const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
   const mapName = getShortMapName((data as any)?.map?.name)
   const currentVeto = getCurrentMapVeto(match, mapName)
   const sideTeamIds = getSideTeamIds(match, currentVeto)
+  const canApplyOverwrittenPlayerSide =
+    Boolean(currentVeto?.teamId) && currentVeto?.side !== undefined && currentVeto.side !== 'NO'
   const matchedPlayerIds = new Set<string>()
   const steamAssignments = new Map<string, Player>()
   const rosterAssignments = new Map<string, Player>()
@@ -365,11 +377,15 @@ const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
           if (!dbPlayer) return [steamid, player]
 
           const displayName = getPlayerDisplayName(dbPlayer, player.name)
+          const teamSide = canApplyOverwrittenPlayerSide
+            ? getSideForTeamId(sideTeamIds, dbPlayer.team)
+            : null
 
           return [
             steamid,
             {
               ...player,
+              team: teamSide ?? player.team,
               steamid: dbPlayer.steamid || steamid,
               name: displayName,
               firstName: dbPlayer.firstName,
