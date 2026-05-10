@@ -5,7 +5,9 @@ import { MatchService } from '../domains/matches/match.service'
 import { TeamService } from '../domains/teams/team.service'
 import { PlayerRepository } from '../domains/players/player.repository'
 import { getSettings } from '../domains/settings/settings.routes'
-import { RoundData } from '../domains/matches/match.types'
+import { Match, RoundData, Veto } from '../domains/matches/match.types'
+import { Team } from '../domains/teams/team.types'
+import { Player } from '../domains/players/player.types'
 
 const matchService = new MatchService()
 const teamService = new TeamService()
@@ -80,6 +82,306 @@ export const syncGSITeams = async () => {
 let lastGSIState: CSGORaw | null = null
 
 export const getLastGSIState = (): CSGORaw | null => lastGSIState
+
+type MatchSide = 'left' | 'right'
+
+interface GSIOverrideCache {
+  expiresAt: number
+  match: Match | null
+  teamsById: Map<string, Team>
+  playersBySteamId: Map<string, Player>
+  playersByTeamId: Map<string, Player[]>
+}
+
+let overrideCache: GSIOverrideCache = {
+  expiresAt: 0,
+  match: null,
+  teamsById: new Map(),
+  playersBySteamId: new Map(),
+  playersByTeamId: new Map()
+}
+
+let playerOverrideByRawSteamId = new Map<string, Player>()
+
+export const getOverriddenPlayerBySteamId = (steamid: string): Player | null =>
+  playerOverrideByRawSteamId.get(steamid) ?? null
+
+let overwriteSettingCache = {
+  expiresAt: 0,
+  value: false
+}
+
+const getOverwriteGSIFromMatchSetting = async (): Promise<boolean> => {
+  const now = Date.now()
+  if (overwriteSettingCache.expiresAt > now) return overwriteSettingCache.value
+
+  const settings = await getSettings()
+  overwriteSettingCache = {
+    expiresAt: now + 1000,
+    value: settings.overwriteGSIFromMatch
+  }
+
+  return overwriteSettingCache.value
+}
+
+const getShortMapName = (mapName: string | undefined): string | null => {
+  if (!mapName) return null
+  return mapName.substring(mapName.lastIndexOf('/') + 1)
+}
+
+const getCurrentMapVeto = (match: Match, mapName: string | null): Veto | null => {
+  if (!mapName) return null
+  return (
+    match.vetos.find((v) => v.mapName === mapName && !v.mapEnd) ??
+    match.vetos.find((v) => v.mapName === mapName) ??
+    null
+  )
+}
+
+const getSideTeamIds = (match: Match, veto: Veto | null): Record<'CT' | 'T', string | null> => {
+  let ctSide: MatchSide = 'left'
+  let tSide: MatchSide = 'right'
+
+  if (veto?.side && veto.side !== 'NO' && veto.teamId) {
+    const vetoTeamSide: MatchSide = veto.teamId === match.right.id ? 'right' : 'left'
+    const otherSide: MatchSide = vetoTeamSide === 'left' ? 'right' : 'left'
+
+    if (veto.side === 'CT') {
+      ctSide = vetoTeamSide
+      tSide = otherSide
+    } else {
+      ctSide = otherSide
+      tSide = vetoTeamSide
+    }
+  }
+
+  if (veto?.reverseSide) {
+    ;[ctSide, tSide] = [tSide, ctSide]
+  }
+
+  return {
+    CT: match[ctSide].id,
+    T: match[tSide].id
+  }
+}
+
+const getOverrideData = async (): Promise<GSIOverrideCache> => {
+  const now = Date.now()
+
+  if (overrideCache.expiresAt > now) {
+    return overrideCache
+  }
+
+  let match: Match | null = null
+  try {
+    match = await matchService.getCurrentMatch()
+  } catch {
+    match = null
+  }
+
+  const teamIds = [match?.left.id, match?.right.id].filter(Boolean) as string[]
+  const teams = await Promise.all(teamIds.map((id) => teamService.getTeamById(id)))
+  const players = await playerRepo.getPlayers()
+  const playersByTeamId = new Map<string, Player[]>()
+
+  for (const player of players) {
+    if (!player.team) continue
+    const teamPlayers = playersByTeamId.get(player.team) ?? []
+    teamPlayers.push(player)
+    playersByTeamId.set(player.team, teamPlayers)
+  }
+
+  overrideCache = {
+    expiresAt: now + 1000,
+    match,
+    teamsById: new Map(teams.filter(Boolean).map((team) => [team!._id, team!])),
+    playersBySteamId: new Map(
+      players.filter((player) => player.steamid).map((player) => [player.steamid, player])
+    ),
+    playersByTeamId
+  }
+
+  return overrideCache
+}
+
+const buildTeamOverride = (
+  existing: any,
+  team: Team,
+  mapScore: number
+): Record<string, unknown> => ({
+  ...existing,
+  id: team._id,
+  name: team.name,
+  country: team.country,
+  shortName: team.shortName,
+  logo: team.logo,
+  map_score: mapScore,
+  extra: team.extra
+})
+
+const getPlayerDisplayName = (player: Player, fallback: string): string =>
+  player.username || [player.firstName, player.lastName].filter(Boolean).join(' ') || fallback
+
+const getRawSlotOrder = (player: any): number => {
+  const slot = typeof player?.observer_slot === 'number' ? player.observer_slot : 99
+  return slot === 0 ? 10 : slot
+}
+
+const assignRosterPlayersToSide = (
+  entries: [string, any][],
+  roster: Player[],
+  matchedPlayerIds: Set<string>
+): Map<string, Player> => {
+  const assignments = new Map<string, Player>()
+  const availablePlayers = roster.filter((player) => !matchedPlayerIds.has(player._id))
+  const sortedEntries = [...entries].sort(([, a], [, b]) => getRawSlotOrder(a) - getRawSlotOrder(b))
+
+  sortedEntries.forEach(([steamid], index) => {
+    const player = availablePlayers[index]
+    if (!player) return
+    assignments.set(steamid, player)
+    matchedPlayerIds.add(player._id)
+  })
+
+  return assignments
+}
+
+const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
+  const allplayers = (data as any)?.allplayers
+  const { match, teamsById, playersBySteamId, playersByTeamId } = await getOverrideData()
+
+  if (!match) {
+    GSI.players = []
+    playerOverrideByRawSteamId = new Map()
+    return data
+  }
+
+  let nextData: any = data
+  const mapName = getShortMapName((data as any)?.map?.name)
+  const currentVeto = getCurrentMapVeto(match, mapName)
+  const sideTeamIds = getSideTeamIds(match, currentVeto)
+  const matchedPlayerIds = new Set<string>()
+  const steamAssignments = new Map<string, Player>()
+  const rosterAssignments = new Map<string, Player>()
+
+  if (allplayers) {
+    for (const [steamid, player] of Object.entries(allplayers) as [string, any][]) {
+      const steamPlayer = playersBySteamId.get(steamid)
+      if (steamPlayer) {
+        steamAssignments.set(steamid, steamPlayer)
+        matchedPlayerIds.add(steamPlayer._id)
+        continue
+      }
+
+      const teamId =
+        player.team === 'CT' ? sideTeamIds.CT : player.team === 'T' ? sideTeamIds.T : null
+      const roster = teamId ? (playersByTeamId.get(teamId) ?? []) : []
+      const nameMatch = roster.find(
+        (rosterPlayer) =>
+          getPlayerDisplayName(rosterPlayer, '').toLocaleLowerCase() ===
+          String(player.name ?? '').toLocaleLowerCase()
+      )
+
+      if (nameMatch && !matchedPlayerIds.has(nameMatch._id)) {
+        rosterAssignments.set(steamid, nameMatch)
+        matchedPlayerIds.add(nameMatch._id)
+      }
+    }
+
+    for (const side of ['CT', 'T'] as const) {
+      const teamId = sideTeamIds[side]
+      if (!teamId) continue
+      const sideEntries = (Object.entries(allplayers) as [string, any][]).filter(
+        ([steamid, player]) =>
+          player.team === side && !playersBySteamId.has(steamid) && !rosterAssignments.has(steamid)
+      )
+      const sideAssignments = assignRosterPlayersToSide(
+        sideEntries,
+        playersByTeamId.get(teamId) ?? [],
+        matchedPlayerIds
+      )
+      sideAssignments.forEach((player, steamid) => rosterAssignments.set(steamid, player))
+    }
+  }
+
+  const overridePlayers = new Map([...steamAssignments, ...rosterAssignments])
+  playerOverrideByRawSteamId = new Map(overridePlayers)
+
+  GSI.players = Array.from(overridePlayers.entries()).map(([steamid, player]) => ({
+    id: player._id,
+    steamid,
+    name: getPlayerDisplayName(player, ''),
+    realName: [player.firstName, player.lastName].filter(Boolean).join(' ') || null,
+    country: player.country || null,
+    avatar: player.avatar || null,
+    extra: player.extra
+  }))
+
+  if ((data as any)?.map) {
+    const ctTeamId = sideTeamIds.CT
+    const tTeamId = sideTeamIds.T
+    const ctTeam = ctTeamId ? teamsById.get(ctTeamId) : null
+    const tTeam = tTeamId ? teamsById.get(tTeamId) : null
+
+    nextData = {
+      ...nextData,
+      map: {
+        ...(data as any).map,
+        ...(ctTeam
+          ? {
+              team_ct: buildTeamOverride(
+                (data as any).map.team_ct,
+                ctTeam,
+                ctTeamId === match.left.id ? match.left.wins : match.right.wins
+              )
+            }
+          : {}),
+        ...(tTeam
+          ? {
+              team_t: buildTeamOverride(
+                (data as any).map.team_t,
+                tTeam,
+                tTeamId === match.left.id ? match.left.wins : match.right.wins
+              )
+            }
+          : {})
+      }
+    }
+  }
+
+  if (allplayers && overridePlayers.size > 0) {
+    nextData = {
+      ...nextData,
+      allplayers: Object.fromEntries(
+        Object.entries(allplayers).map(([steamid, player]: [string, any]) => {
+          const dbPlayer = overridePlayers.get(steamid)
+          if (!dbPlayer) return [steamid, player]
+
+          const displayName = getPlayerDisplayName(dbPlayer, player.name)
+
+          return [
+            steamid,
+            {
+              ...player,
+              steamid: dbPlayer.steamid || steamid,
+              name: displayName,
+              firstName: dbPlayer.firstName,
+              lastName: dbPlayer.lastName,
+              username: dbPlayer.username,
+              avatar: dbPlayer.avatar,
+              country: dbPlayer.country,
+              teamId: dbPlayer.team,
+              isCoach: dbPlayer.isCoach,
+              extra: dbPlayer.extra
+            }
+          ]
+        })
+      )
+    }
+  }
+
+  return nextData
+}
 
 // Spectator slot map
 // Populated via PUT /api/spectator/slots from the Spectator Binds page
@@ -271,16 +573,23 @@ export const setupGSI = (io: Server) => {
   })
 
   // --- GSI HTTP endpoint ---
-  router.post('/input', (req: Request, res: Response) => {
+  router.post('/input', async (req: Request, res: Response) => {
     try {
+      const overwriteGSIFromMatch = await getOverwriteGSIFromMatchSetting()
+      let gsiData = overwriteGSIFromMatch ? await applyMatchOverrides(req.body) : req.body
+      if (!overwriteGSIFromMatch) {
+        GSI.players = []
+        playerOverrideByRawSteamId = new Map()
+      }
+
       // --- Dead player position preservation ---
       // Cache: steamid -> last death position
       if (!global.deadPlayerPositions) global.deadPlayerPositions = {}
       const deadPlayerPositions = global.deadPlayerPositions
 
-      if (req.body?.allplayers) {
-        for (const steamid of Object.keys(req.body.allplayers)) {
-          const player = req.body.allplayers[steamid]
+      if ((gsiData as any)?.allplayers) {
+        for (const steamid of Object.keys((gsiData as any).allplayers)) {
+          const player = (gsiData as any).allplayers[steamid]
 
           // Player is dead
           if (player.state && player.state.health === 0) {
@@ -300,24 +609,24 @@ export const setupGSI = (io: Server) => {
         }
       }
       // Fix player observer_slot: CS2 raw data sends 0–10 but HUDs expect 1–10 with 10 wrapping to 0
-      if (req.body?.allplayers) {
-        for (const key of Object.keys(req.body.allplayers)) {
-          const player = req.body.allplayers[key]
+      if ((gsiData as any)?.allplayers) {
+        for (const key of Object.keys((gsiData as any).allplayers)) {
+          const player = (gsiData as any).allplayers[key]
           if (typeof player?.observer_slot === 'number') {
             player.observer_slot = player.observer_slot + 1 === 10 ? 0 : player.observer_slot + 1
           }
         }
       }
 
-      lastGSIState = req.body
+      lastGSIState = gsiData
 
       // Build payload for for HUDs
-      let hudPayload = req.body
-      const needsCoachFilter = req.body?.allplayers && coachSteamIds.size > 0
-      const needsSlotRemap = req.body?.allplayers && nameToSlot.size > 0
+      let hudPayload = gsiData
+      const needsCoachFilter = (gsiData as any)?.allplayers && coachSteamIds.size > 0
+      const needsSlotRemap = (gsiData as any)?.allplayers && nameToSlot.size > 0
 
       if (needsCoachFilter || needsSlotRemap) {
-        let remapped = { ...req.body.allplayers }
+        let remapped = { ...(gsiData as any).allplayers }
 
         // Remove coaches
         if (needsCoachFilter) {
@@ -346,14 +655,14 @@ export const setupGSI = (io: Server) => {
           )
         }
 
-        hudPayload = { ...req.body, allplayers: remapped }
+        hudPayload = { ...(gsiData as any), allplayers: remapped }
       }
 
       // Feed raw payload into CSGOGSI so backend listeners fire
-      GSI.digest(req.body)
+      GSI.digest(gsiData)
 
       // Vue UI gets the full payload (coaches visible in LiveView)
-      io.except('huds').emit('update', req.body)
+      io.except('huds').emit('update', gsiData)
       // HUDs get filtered payload
       io.to('huds').emit('update', hudPayload)
 

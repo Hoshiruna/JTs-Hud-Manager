@@ -1,40 +1,47 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
-import { useSettings } from '../../features/settings/composables/useSettings';
-import BaseButton from './BaseButton.vue';
-import BaseCheckbox from './BaseCheckbox.vue';
+import { ref, watch } from 'vue'
+import { useSettings } from '../../features/settings/composables/useSettings'
+import BaseButton from './BaseButton.vue'
+import BaseCheckbox from './BaseCheckbox.vue'
 
-const props = defineProps<{ open: boolean }>();
-const emit = defineEmits<{ (e: 'close'): void }>();
+const props = defineProps<{ open: boolean }>()
+const emit = defineEmits<{ (e: 'close'): void }>()
 
-const { settings, isLoading, isSaving, fetchSettings } = useSettings();
+const { settings, isLoading, isSaving, fetchSettings, saveSettings } = useSettings()
 
-watch(() => props.open, (val) => {
-  if (val) fetchSettings();
-});
+watch(
+  () => props.open,
+  (val) => {
+    if (val) fetchSettings()
+  }
+)
 
 // --- GSI Config Installation ---
-const steamPath = ref('C:\\Program Files (x86)\\Steam');
-const gsiStatus = ref<{ ok: boolean; message: string } | null>(null);
-const isInstallingGsi = ref(false);
+const steamPath = ref('C:\\Program Files (x86)\\Steam')
+const gsiStatus = ref<{ ok: boolean; message: string } | null>(null)
+const isInstallingGsi = ref(false)
 
 const browseSteamFolder = async () => {
-  const selected = await window.electron.ipcRenderer.invoke('select-folder', steamPath.value);
+  const selected = await window.electron.ipcRenderer.invoke('select-folder', steamPath.value)
   if (selected) {
-    steamPath.value = selected;
-    gsiStatus.value = null;
+    steamPath.value = selected
+    gsiStatus.value = null
   }
-};
+}
 
 const installGsiCfg = async () => {
-  isInstallingGsi.value = true;
-  gsiStatus.value = null;
+  isInstallingGsi.value = true
+  gsiStatus.value = null
   try {
-    gsiStatus.value = await window.electron.ipcRenderer.invoke('install-gsi-cfg', steamPath.value);
+    gsiStatus.value = await window.electron.ipcRenderer.invoke('install-gsi-cfg', steamPath.value)
   } finally {
-    isInstallingGsi.value = false;
+    isInstallingGsi.value = false
   }
-};
+}
+
+const updateSetting = async (updates: Partial<typeof settings.value>) => {
+  await saveSettings(updates)
+}
 </script>
 
 <template>
@@ -49,13 +56,25 @@ const installGsiCfg = async () => {
         <div class="absolute inset-0 bg-black/50" @click="emit('close')" />
 
         <!-- Panel — anchored to bottom-left near the sidebar -->
-        <div class="relative z-10 ml-4 mb-16 w-96 bg-surface border border-zinc-700 rounded-xl shadow-2xl p-5 flex flex-col gap-5">
-          
+        <div
+          class="relative z-10 ml-4 mb-16 w-96 bg-surface border border-zinc-700 rounded-xl shadow-2xl p-5 flex flex-col gap-5"
+        >
           <div class="flex items-center justify-between">
             <h2 class="text-text-main font-bold text-base">Settings</h2>
             <BaseButton @click="emit('close')" variant="ghost" size="sm">
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="w-5 h-5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             </BaseButton>
           </div>
@@ -71,9 +90,17 @@ const installGsiCfg = async () => {
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm font-medium text-zinc-200">Auto Switch Sides</p>
-                  <p class="text-xs text-zinc-500 mt-0.5">Automatically flip team sides at halftime</p>
+                  <p class="text-xs text-zinc-500 mt-0.5">
+                    Automatically flip team sides at halftime
+                  </p>
                 </div>
-                <BaseCheckbox v-model="settings.autoSwitchSides" :disabled="isSaving" size="md" class="text-primary" />
+                <BaseCheckbox
+                  :model-value="settings.autoSwitchSides"
+                  :disabled="isSaving"
+                  size="md"
+                  class="text-primary"
+                  @update:model-value="(value) => updateSetting({ autoSwitchSides: value })"
+                />
               </div>
             </div>
 
@@ -81,9 +108,30 @@ const installGsiCfg = async () => {
             <div class="border-t border-border pt-4">
               <p class="text-xs font-semibold capitalize text-zinc-500 mb-3">CS2 Integration</p>
 
+              <div class="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <p class="text-sm font-medium text-zinc-200">GSI Match Overwrite</p>
+                  <p class="text-xs text-zinc-500 mt-0.5">
+                    Replace live team and player identity data from the current match
+                  </p>
+                </div>
+                <BaseButton
+                  size="sm"
+                  :variant="settings.overwriteGSIFromMatch ? 'primary' : 'secondary'"
+                  :disabled="isSaving"
+                  class="shrink-0"
+                  @click="updateSetting({ overwriteGSIFromMatch: !settings.overwriteGSIFromMatch })"
+                >
+                  {{ settings.overwriteGSIFromMatch ? 'On' : 'Off' }}
+                </BaseButton>
+              </div>
+
               <div class="flex flex-col gap-2">
                 <p class="text-sm font-medium text-zinc-200">Install GSI Config</p>
-                <p class="text-xs text-zinc-500">Select your Steam root folder. The config file will be written to your CS2 cfg directory.</p>
+                <p class="text-xs text-zinc-500">
+                  Select your Steam root folder. The config file will be written to your CS2 cfg
+                  directory.
+                </p>
 
                 <!-- Path selector -->
                 <div class="flex gap-2 mt-1">
@@ -93,11 +141,7 @@ const installGsiCfg = async () => {
                     placeholder="C:\Program Files (x86)\Steam"
                     class="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-primary"
                   />
-                  <BaseButton
-                    @click="browseSteamFolder"
-                    variant="secondary"
-                    size="sm"
-                  >
+                  <BaseButton @click="browseSteamFolder" variant="secondary" size="sm">
                     Browse
                   </BaseButton>
                 </div>
@@ -115,7 +159,11 @@ const installGsiCfg = async () => {
                 <div
                   v-if="gsiStatus"
                   class="text-xs rounded-lg px-3 py-2 whitespace-pre-wrap"
-                  :class="gsiStatus.ok ? 'bg-emerald-900/40 text-emerald-400 border border-emerald-800/50' : 'bg-red-900/40 text-red-400 border border-red-800/50'"
+                  :class="
+                    gsiStatus.ok
+                      ? 'bg-emerald-900/40 text-emerald-400 border border-emerald-800/50'
+                      : 'bg-red-900/40 text-red-400 border border-red-800/50'
+                  "
                 >
                   {{ gsiStatus.message }}
                 </div>
@@ -129,6 +177,12 @@ const installGsiCfg = async () => {
 </template>
 
 <style scoped>
-.fade-enter-active, .fade-leave-active { transition: opacity 0.15s ease; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
 </style>

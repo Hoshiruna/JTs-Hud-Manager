@@ -1,54 +1,63 @@
-import { Router, Request, Response } from 'express';
-import { dbAll, dbRun } from '../../database/sqlite';
+import { Router, Request, Response } from 'express'
+import { dbAll, dbRun } from '../../database/sqlite'
 
-const router = Router();
+const router = Router()
 
 export interface AppSettings {
-  autoSwitchSides: boolean;
-  telnetHost: string;
-  telnetPort: number;
+  autoSwitchSides: boolean
+  overwriteGSIFromMatch: boolean
+  telnetHost: string
+  telnetPort: number
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
   autoSwitchSides: true,
+  overwriteGSIFromMatch: false,
   telnetHost: '127.0.0.1',
-  telnetPort: 2020,
-};
+  telnetPort: 2020
+}
 
 // Load all settings from the DB and return as a typed object
 export const getSettings = async (): Promise<AppSettings> => {
-  const rows: { key: string; value: string }[] = await dbAll('SELECT key, value FROM settings');
-  const map = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  const rows: { key: string; value: string }[] = await dbAll('SELECT key, value FROM settings')
+  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]))
   return {
-    autoSwitchSides: map.autoSwitchSides !== undefined ? map.autoSwitchSides === 'true' : DEFAULT_SETTINGS.autoSwitchSides,
+    autoSwitchSides:
+      map.autoSwitchSides !== undefined
+        ? map.autoSwitchSides === 'true'
+        : DEFAULT_SETTINGS.autoSwitchSides,
+    overwriteGSIFromMatch:
+      map.overwriteGSIFromMatch !== undefined
+        ? map.overwriteGSIFromMatch === 'true'
+        : DEFAULT_SETTINGS.overwriteGSIFromMatch,
     telnetHost: map.telnetHost ?? DEFAULT_SETTINGS.telnetHost,
-    telnetPort: map.telnetPort !== undefined ? Number(map.telnetPort) : DEFAULT_SETTINGS.telnetPort,
-  };
-};
+    telnetPort: map.telnetPort !== undefined ? Number(map.telnetPort) : DEFAULT_SETTINGS.telnetPort
+  }
+}
 
 // GET /api/settings — return all settings as a JSON object
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    res.json(await getSettings());
+    res.json(await getSettings())
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message })
   }
-});
+})
 
 // PUT /api/settings — update one or more settings keys
 router.put('/', async (req: Request, res: Response) => {
   try {
-    const updates: Partial<AppSettings> = req.body;
+    const updates: Partial<AppSettings> = req.body
     for (const [key, value] of Object.entries(updates)) {
       await dbRun(
         'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
         [key, String(value)]
-      );
+      )
     }
-    res.json(await getSettings());
+    res.json(await getSettings())
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message })
   }
-});
+})
 
-export default router;
+export default router

@@ -36,14 +36,17 @@ export function useLiveView() {
   // --- GSI Parsing ---
   const allPlayersList = computed((): GsiPlayer[] => {
     if (!gameState.value?.allplayers) return []
-    return Object.entries(gameState.value.allplayers).map(([steamid, p]: [string, any]) => ({
-      steamid,
-      name: p.name,
-      side: p.team,
-      stats: p.match_stats,
-      inDB: dbPlayers.value.some((db) => db.steamid === steamid),
-      isCoach: dbPlayers.value.some((db) => db.steamid === steamid && db.isCoach)
-    }))
+    return Object.entries(gameState.value.allplayers).map(([rawSteamid, p]: [string, any]) => {
+      const steamid = p.steamid || rawSteamid
+      return {
+        steamid,
+        name: p.name,
+        side: p.team,
+        stats: p.match_stats,
+        inDB: dbPlayers.value.some((db) => db.steamid === steamid),
+        isCoach: dbPlayers.value.some((db) => db.steamid === steamid && db.isCoach)
+      }
+    })
   })
 
   const ctPlayers = computed(() => allPlayersList.value.filter((p) => p.side === 'CT'))

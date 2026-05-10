@@ -11,7 +11,10 @@ export const getTeamLogo = async (req: Request, res: Response) => {
   try {
     const filename = await teamService.getTeamLogoPath(req.params.id as string)
     if (!filename) return res.status(404).json({ error: 'Logo not found' })
-    res.sendFile(path.join(uploadsPath, filename))
+    res.setHeader('Cache-Control', 'no-store')
+    res.sendFile(path.join(uploadsPath, filename), (error) => {
+      if (error && !res.headersSent) res.status(404).json({ error: 'Logo file not found' })
+    })
     return
   } catch (error: any) {
     res.status(500).json({ error: error.message })

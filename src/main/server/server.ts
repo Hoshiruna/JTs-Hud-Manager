@@ -12,7 +12,7 @@ import { setupGSI } from './integrations/gsi'
 
 import createMatchRouter from './domains/matches/match.routes'
 import playerRoutes from './domains/players/player.routes'
-import teamRoutes from './domains/teams/team.routes'
+import createTeamRouter from './domains/teams/team.routes'
 import createHudRouter from './domains/huds/hud.routes'
 import settingsRoutes from './domains/settings/settings.routes'
 import spectatorRoutes from './domains/spectator/spectator.routes'
@@ -44,6 +44,10 @@ export const io = new Server(httpServer, {
 })
 
 app.use(express.json())
+app.use((req, _res, next) => {
+  req.url = req.url.replace(/\/{2,}/g, '/')
+  next()
+})
 // Middleware to handle signed HUD files (decode JWT before serving)
 app.use(signedHudMiddleware)
 // The default mount must come first so it takes priority over the user huds folder
@@ -52,7 +56,7 @@ app.use('/huds', express.static(hudsPath))
 app.use('/api/uploads', express.static(uploadsPath))
 
 app.use('/api/huds', createHudRouter(io))
-app.use('/api/teams', teamRoutes)
+app.use('/api/teams', createTeamRouter(io))
 app.use('/api/players', playerRoutes)
 app.use('/api/match', createMatchRouter(io))
 app.use('/api/settings', settingsRoutes)
