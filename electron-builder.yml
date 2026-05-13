@@ -18,6 +18,9 @@ protocols:
 win:
   executableName: JTs Hud Manager
   icon: icon.ico
+  signAndEditExecutable: false
+toolsets:
+  winCodeSign: 1.1.0
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

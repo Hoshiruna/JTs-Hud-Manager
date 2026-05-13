@@ -6,6 +6,7 @@ import BaseInput from '@renderer/components/base/BaseInput.vue';
 import BaseSelect from '@renderer/components/base/BaseSelect.vue';
 import { useMatches } from '../features/matches/composables/useMatches';
 import { useTeams } from '../features/teams/composables/useTeams';
+import { useSettings } from '../features/settings/composables/useSettings';
 import { API_URL } from '../index';
 import BaseButton from '@renderer/components/base/BaseButton.vue';
 import BaseCheckbox from '@renderer/components/base/BaseCheckbox.vue';
@@ -15,6 +16,7 @@ const route = useRoute();
 
 const { saveMatch } = useMatches();
 const { teams, fetchTeams } = useTeams();
+const { settings, fetchSettings } = useSettings();
 
 const isEditing = computed(() => !!route.params.id);
 const isSaving = ref(false);
@@ -70,7 +72,7 @@ const vetoWinnerOptions = computed((): SelectOption[] => [
 
 // Load match data if editing
 onMounted(async () => {
-  await fetchTeams();
+  await Promise.all([fetchTeams(), fetchSettings()]);
   if (isEditing.value) {
     try {
       const res = await fetch(`${API_URL}/match/${route.params.id}`);
@@ -108,6 +110,8 @@ const getDefaultVetoForm = () => ({
   side: 'NO' as string,
   type: 'pick' as string,
   reverseSide: false,
+  gsiSideOverride: false,
+  gsiLeftSide: 'CT' as 'CT' | 'T',
   mapEnd: false,
   winner: '' as string,
   score: {} as Record<string, number>
@@ -139,10 +143,21 @@ const clearSlot = (index: number) => {
 
 const saveVetoModal = () => {
   if (editingSlot.value === null) return;
-  form.value.vetos[editingSlot.value] = { ...vetoForm.value };
+  form.value.vetos[editingSlot.value] = {
+    ...vetoForm.value,
+    gsiSideOverride: settings.value.overwriteGSIFromMatch
+      ? vetoForm.value.gsiSideOverride
+      : false
+  };
   isVetoModalOpen.value = false;
   editingSlot.value = null;
 };
+
+const setGsiLeftSide = (side: string) => {
+  if (side === 'CT' || side === 'T') vetoForm.value.gsiLeftSide = side;
+};
+
+const getOppositeSide = (side: string) => (side === 'CT' ? 'T' : 'CT');
 
 const getScore = (score: Record<string, number>, teamId: string) => score?.[teamId] ?? 0;
 const setScore = (teamId: string, val: string) => {
@@ -425,6 +440,63 @@ const vetoTypeColor: Record<string, string> = {
                 : 'bg-surface text-zinc-400 hover:bg-surface-hover'"
               class="flex-1 py-2 rounded-lg border border-border text-xs font-bold uppercase transition-colors hover:cursor-pointer"
             >{{ s }}</button>
+          </div>
+        </div>
+
+        <!-- GSI explicit side override -->
+        <div class="rounded-lg border border-border bg-zinc-900/60 p-3 space-y-3">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <p class="text-xs font-bold uppercase tracking-wider text-zinc-400">GSI Team Sides</p>
+              <p class="text-xs text-zinc-500 mt-0.5">
+                Set the left team's starting side. Side switches only swap colors.
+              </p>
+            </div>
+            <BaseCheckbox
+              v-model="vetoForm.gsiSideOverride"
+              :disabled="!settings.overwriteGSIFromMatch"
+              size="md"
+              class="text-primary"
+            />
+          </div>
+
+          <div v-if="!settings.overwriteGSIFromMatch" class="text-xs text-zinc-500">
+            Enable GSI Match Overwrite in Settings to configure this.
+          </div>
+
+          <div v-else-if="vetoForm.gsiSideOverride" class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[10px] font-bold uppercase tracking-wider text-blue-400 mb-1.5">
+                {{ getTeamName(form.left.id) }}
+              </label>
+              <div class="flex gap-2">
+                <button
+                  v-for="side in ['CT', 'T']"
+                  :key="side"
+                  type="button"
+                  @click="setGsiLeftSide(side)"
+                  :class="vetoForm.gsiLeftSide === side
+                    ? side === 'CT' ? 'bg-blue-600 text-text-main' : 'bg-amber-500 text-text-main'
+                    : 'bg-surface text-zinc-400 hover:bg-surface-hover'"
+                  class="flex-1 py-2 rounded-lg border border-border text-xs font-bold uppercase transition-colors hover:cursor-pointer"
+                >
+                  {{ side }}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label class="block text-[10px] font-bold uppercase tracking-wider text-amber-400 mb-1.5">
+                {{ getTeamName(form.right.id) }}
+              </label>
+              <div
+                class="py-2 rounded-lg border border-border text-center text-xs font-bold uppercase"
+                :class="getOppositeSide(vetoForm.gsiLeftSide) === 'CT'
+                  ? 'bg-blue-600 text-text-main'
+                  : 'bg-amber-500 text-text-main'"
+              >
+                {{ getOppositeSide(vetoForm.gsiLeftSide) }}
+              </div>
+            </div>
           </div>
         </div>
 

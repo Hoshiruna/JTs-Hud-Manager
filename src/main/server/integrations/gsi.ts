@@ -84,6 +84,9 @@ let lastGSIState: CSGORaw | null = null
 export const getLastGSIState = (): CSGORaw | null => lastGSIState
 
 type MatchSide = 'left' | 'right'
+type GameSide = 'CT' | 'T'
+type TeamOrientation = 'left' | 'right'
+type SideTeamIds = Record<GameSide, string | null>
 
 interface GSIOverrideCache {
   expiresAt: number
@@ -145,7 +148,20 @@ const getCurrentMapVeto = (match: Match, mapName: string | null): Veto | null =>
   )
 }
 
-const getSideTeamIds = (match: Match, veto: Veto | null): Record<'CT' | 'T', string | null> => {
+const getSideTeamIds = (match: Match, veto: Veto | null): SideTeamIds => {
+  if (veto?.gsiSideOverride && (veto.gsiLeftSide === 'CT' || veto.gsiLeftSide === 'T')) {
+    const leftSide =
+      veto.reverseSide && veto.gsiLeftSide === 'CT'
+        ? 'T'
+        : veto.reverseSide && veto.gsiLeftSide === 'T'
+          ? 'CT'
+          : veto.gsiLeftSide
+    return {
+      CT: leftSide === 'CT' ? match.left.id : match.right.id,
+      T: leftSide === 'CT' ? match.right.id : match.left.id
+    }
+  }
+
   let ctSide: MatchSide = 'left'
   let tSide: MatchSide = 'right'
 
@@ -173,9 +189,9 @@ const getSideTeamIds = (match: Match, veto: Veto | null): Record<'CT' | 'T', str
 }
 
 const getSideForTeamId = (
-  sideTeamIds: Record<'CT' | 'T', string | null>,
+  sideTeamIds: SideTeamIds,
   teamId: string | null
-): 'CT' | 'T' | null => {
+): GameSide | null => {
   if (!teamId) return null
   if (sideTeamIds.CT === teamId) return 'CT'
   if (sideTeamIds.T === teamId) return 'T'
@@ -224,10 +240,14 @@ const getOverrideData = async (): Promise<GSIOverrideCache> => {
 const buildTeamOverride = (
   existing: any,
   team: Team,
-  mapScore: number
+  mapScore: number,
+  side: GameSide,
+  orientation: TeamOrientation
 ): Record<string, unknown> => ({
   ...existing,
   id: team._id,
+  side,
+  orientation,
   name: team.name,
   country: team.country,
   shortName: team.shortName,
@@ -239,10 +259,22 @@ const buildTeamOverride = (
 const getPlayerDisplayName = (player: Player, fallback: string): string =>
   player.username || [player.firstName, player.lastName].filter(Boolean).join(' ') || fallback
 
+const getTeamOrientation = (match: Match, teamId: string | null): TeamOrientation | null => {
+  if (teamId === match.left.id) return 'left'
+  if (teamId === match.right.id) return 'right'
+  return null
+}
+
+const getExistingOrientation = (team: any, fallback: TeamOrientation): TeamOrientation =>
+  team?.orientation === 'right' ? 'right' : team?.orientation === 'left' ? 'left' : fallback
+
 const getRawSlotOrder = (player: any): number => {
   const slot = typeof player?.observer_slot === 'number' ? player.observer_slot : 99
   return slot === 0 ? 10 : slot
 }
+
+const getIncomingSlotOrder = (player: any): number =>
+  typeof player?.observer_slot === 'number' ? player.observer_slot : 99
 
 const assignRosterPlayersToSide = (
   entries: [string, any][],
@@ -263,6 +295,19 @@ const assignRosterPlayersToSide = (
   return assignments
 }
 
+const getVisualMatchSideEntries = (
+  allplayers: any
+): Record<MatchSide, [string, any][]> => {
+  const sortedEntries = (Object.entries(allplayers ?? {}) as [string, any][])
+    .filter(([, player]) => typeof player?.observer_slot === 'number')
+    .sort(([, a], [, b]) => getIncomingSlotOrder(a) - getIncomingSlotOrder(b))
+
+  return {
+    left: sortedEntries.slice(0, 5),
+    right: sortedEntries.slice(5, 10)
+  }
+}
+
 const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
   const allplayers = (data as any)?.allplayers
   const { match, teamsById, playersBySteamId, playersByTeamId } = await getOverrideData()
@@ -277,49 +322,67 @@ const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
   const mapName = getShortMapName((data as any)?.map?.name)
   const currentVeto = getCurrentMapVeto(match, mapName)
   const sideTeamIds = getSideTeamIds(match, currentVeto)
-  const canApplyOverwrittenPlayerSide =
-    Boolean(currentVeto?.teamId) && currentVeto?.side !== undefined && currentVeto.side !== 'NO'
+  const shouldPinPlayersToMatchbarSide = Boolean(currentVeto?.gsiSideOverride)
   const matchedPlayerIds = new Set<string>()
   const steamAssignments = new Map<string, Player>()
   const rosterAssignments = new Map<string, Player>()
 
   if (allplayers) {
-    for (const [steamid, player] of Object.entries(allplayers) as [string, any][]) {
-      const steamPlayer = playersBySteamId.get(steamid)
-      if (steamPlayer) {
-        steamAssignments.set(steamid, steamPlayer)
-        matchedPlayerIds.add(steamPlayer._id)
-        continue
-      }
-
-      const teamId =
-        player.team === 'CT' ? sideTeamIds.CT : player.team === 'T' ? sideTeamIds.T : null
-      const roster = teamId ? (playersByTeamId.get(teamId) ?? []) : []
-      const nameMatch = roster.find(
-        (rosterPlayer) =>
-          getPlayerDisplayName(rosterPlayer, '').toLocaleLowerCase() ===
-          String(player.name ?? '').toLocaleLowerCase()
-      )
-
-      if (nameMatch && !matchedPlayerIds.has(nameMatch._id)) {
-        rosterAssignments.set(steamid, nameMatch)
-        matchedPlayerIds.add(nameMatch._id)
-      }
-    }
-
-    for (const side of ['CT', 'T'] as const) {
-      const teamId = sideTeamIds[side]
-      if (!teamId) continue
-      const sideEntries = (Object.entries(allplayers) as [string, any][]).filter(
-        ([steamid, player]) =>
-          player.team === side && !playersBySteamId.has(steamid) && !rosterAssignments.has(steamid)
-      )
-      const sideAssignments = assignRosterPlayersToSide(
-        sideEntries,
-        playersByTeamId.get(teamId) ?? [],
+    if (shouldPinPlayersToMatchbarSide) {
+      const visualEntries = getVisualMatchSideEntries(allplayers)
+      const leftAssignments = assignRosterPlayersToSide(
+        visualEntries.left,
+        match.left.id ? (playersByTeamId.get(match.left.id) ?? []) : [],
         matchedPlayerIds
       )
-      sideAssignments.forEach((player, steamid) => rosterAssignments.set(steamid, player))
+      const rightAssignments = assignRosterPlayersToSide(
+        visualEntries.right,
+        match.right.id ? (playersByTeamId.get(match.right.id) ?? []) : [],
+        matchedPlayerIds
+      )
+
+      leftAssignments.forEach((player, steamid) => rosterAssignments.set(steamid, player))
+      rightAssignments.forEach((player, steamid) => rosterAssignments.set(steamid, player))
+    } else {
+      for (const [steamid, player] of Object.entries(allplayers) as [string, any][]) {
+        const steamPlayer = playersBySteamId.get(steamid)
+        if (steamPlayer) {
+          steamAssignments.set(steamid, steamPlayer)
+          matchedPlayerIds.add(steamPlayer._id)
+          continue
+        }
+
+        const teamId =
+          player.team === 'CT' ? sideTeamIds.CT : player.team === 'T' ? sideTeamIds.T : null
+        const roster = teamId ? (playersByTeamId.get(teamId) ?? []) : []
+        const nameMatch = roster.find(
+          (rosterPlayer) =>
+            getPlayerDisplayName(rosterPlayer, '').toLocaleLowerCase() ===
+            String(player.name ?? '').toLocaleLowerCase()
+        )
+
+        if (nameMatch && !matchedPlayerIds.has(nameMatch._id)) {
+          rosterAssignments.set(steamid, nameMatch)
+          matchedPlayerIds.add(nameMatch._id)
+        }
+      }
+
+      for (const side of ['CT', 'T'] as const) {
+        const teamId = sideTeamIds[side]
+        if (!teamId) continue
+        const sideEntries = (Object.entries(allplayers) as [string, any][]).filter(
+          ([steamid, player]) =>
+            player.team === side &&
+            !playersBySteamId.has(steamid) &&
+            !rosterAssignments.has(steamid)
+        )
+        const sideAssignments = assignRosterPlayersToSide(
+          sideEntries,
+          playersByTeamId.get(teamId) ?? [],
+          matchedPlayerIds
+        )
+        sideAssignments.forEach((player, steamid) => rosterAssignments.set(steamid, player))
+      }
     }
   }
 
@@ -341,6 +404,10 @@ const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
     const tTeamId = sideTeamIds.T
     const ctTeam = ctTeamId ? teamsById.get(ctTeamId) : null
     const tTeam = tTeamId ? teamsById.get(tTeamId) : null
+    const ctOrientation =
+      getTeamOrientation(match, ctTeamId) ?? getExistingOrientation((data as any).map.team_ct, 'left')
+    const tOrientation =
+      getTeamOrientation(match, tTeamId) ?? getExistingOrientation((data as any).map.team_t, 'right')
 
     nextData = {
       ...nextData,
@@ -351,7 +418,9 @@ const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
               team_ct: buildTeamOverride(
                 (data as any).map.team_ct,
                 ctTeam,
-                ctTeamId === match.left.id ? match.left.wins : match.right.wins
+                ctTeamId === match.left.id ? match.left.wins : match.right.wins,
+                'CT',
+                ctOrientation
               )
             }
           : {}),
@@ -360,7 +429,9 @@ const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
               team_t: buildTeamOverride(
                 (data as any).map.team_t,
                 tTeam,
-                tTeamId === match.left.id ? match.left.wins : match.right.wins
+                tTeamId === match.left.id ? match.left.wins : match.right.wins,
+                'T',
+                tOrientation
               )
             }
           : {})
@@ -369,37 +440,67 @@ const applyMatchOverrides = async (data: CSGORaw): Promise<CSGORaw> => {
   }
 
   if (allplayers && overridePlayers.size > 0) {
+    const overwrittenAllplayers = Object.fromEntries(
+      Object.entries(allplayers).map(([steamid, player]: [string, any]) => {
+        const dbPlayer = overridePlayers.get(steamid)
+        if (!dbPlayer) return [steamid, player]
+
+        const displayName = getPlayerDisplayName(dbPlayer, player.name)
+        const teamSide = getSideForTeamId(sideTeamIds, dbPlayer.team)
+
+        return [
+          steamid,
+          {
+            ...player,
+            team: teamSide ?? player.team,
+            steamid: dbPlayer.steamid || steamid,
+            name: displayName,
+            firstName: dbPlayer.firstName,
+            lastName: dbPlayer.lastName,
+            username: dbPlayer.username,
+            avatar: dbPlayer.avatar,
+            country: dbPlayer.country,
+            teamId: dbPlayer.team,
+            isCoach: dbPlayer.isCoach,
+            extra: dbPlayer.extra
+          }
+        ]
+      })
+    )
+
     nextData = {
       ...nextData,
-      allplayers: Object.fromEntries(
-        Object.entries(allplayers).map(([steamid, player]: [string, any]) => {
-          const dbPlayer = overridePlayers.get(steamid)
-          if (!dbPlayer) return [steamid, player]
+      allplayers: overwrittenAllplayers
+    }
+  }
 
-          const displayName = getPlayerDisplayName(dbPlayer, player.name)
-          const teamSide = canApplyOverwrittenPlayerSide
-            ? getSideForTeamId(sideTeamIds, dbPlayer.team)
-            : null
+  if (Array.isArray((nextData as any)?.players) && overridePlayers.size > 0) {
+    nextData = {
+      ...nextData,
+      players: (nextData as any).players.map((player: any) => {
+        const steamid = String(player?.steamid ?? player?.id ?? '')
+        const dbPlayer = overridePlayers.get(steamid)
+        if (!dbPlayer) return player
 
-          return [
-            steamid,
-            {
-              ...player,
-              team: teamSide ?? player.team,
-              steamid: dbPlayer.steamid || steamid,
-              name: displayName,
-              firstName: dbPlayer.firstName,
-              lastName: dbPlayer.lastName,
-              username: dbPlayer.username,
-              avatar: dbPlayer.avatar,
-              country: dbPlayer.country,
-              teamId: dbPlayer.team,
-              isCoach: dbPlayer.isCoach,
-              extra: dbPlayer.extra
-            }
-          ]
-        })
-      )
+        const teamSide = getSideForTeamId(sideTeamIds, dbPlayer.team)
+        const matchSide = getTeamOrientation(match, dbPlayer.team)
+        if (!teamSide) return player
+
+        return {
+          ...player,
+          team:
+            typeof player.team === 'object' && player.team !== null
+              ? {
+                  ...player.team,
+                  side: teamSide,
+                  orientation: matchSide ?? player.team.orientation
+                }
+              : teamSide,
+          teamId: dbPlayer.team,
+          matchSide,
+          colorSide: teamSide
+        }
+      })
     }
   }
 
@@ -477,7 +578,8 @@ export const setupGSI = (io: Server) => {
       if (!match) return
 
       const mapName = score.map.name.substring(score.map.name.lastIndexOf('/') + 1)
-      const isReversed = match.vetos.some((v) => v.mapName === mapName && v.reverseSide)
+      const currentVeto = getCurrentMapVeto(match, mapName)
+      const sideTeamIds = getSideTeamIds(match, currentVeto)
 
       const ctId = score.map.team_ct.id
       const tId = score.map.team_t.id
@@ -487,22 +589,19 @@ export const setupGSI = (io: Server) => {
       const updatedVetos = match.vetos.map((veto) => {
         if (veto.mapName !== mapName || !ctId || !tId) return veto
 
-        // Determine winner based on score and reverseSide
         const ctWon = ctScore > tScore
-        const winnerSideId = ctWon ? ctId : tId
-        const winnerTeamId = isReversed
-          ? ctWon
-            ? tId
-            : ctId // reversed: CT in-game = T in database
-          : winnerSideId
+        const ctTeamId = sideTeamIds.CT ?? ctId
+        const tTeamId = sideTeamIds.T ?? tId
+        const winnerTeamId = ctWon ? ctTeamId : tTeamId
 
         return {
           ...veto,
           winner: winnerTeamId,
           mapEnd: true,
-          score: isReversed
-            ? { [ctId]: tScore, [tId]: ctScore } // swap scores back to match DB orientation
-            : { [ctId]: ctScore, [tId]: tScore }
+          score: {
+            [ctTeamId]: ctScore,
+            [tTeamId]: tScore
+          }
         }
       })
 
@@ -511,13 +610,11 @@ export const setupGSI = (io: Server) => {
 
       // Increment series wins for the correct side
       let { left, right } = match
-      const winnerId = score.winner.id
+      const winnerId = ctScore > tScore ? sideTeamIds.CT : sideTeamIds.T
       if (winnerId === match.left.id) {
-        left = { ...left, wins: left.wins + (isReversed ? 0 : 1) }
-        right = { ...right, wins: right.wins + (isReversed ? 1 : 0) }
+        left = { ...left, wins: left.wins + 1 }
       } else if (winnerId === match.right.id) {
-        right = { ...right, wins: right.wins + (isReversed ? 0 : 1) }
-        left = { ...left, wins: left.wins + (isReversed ? 1 : 0) }
+        right = { ...right, wins: right.wins + 1 }
       }
 
       await matchService.updateMatch(match.id, { vetos: updatedVetos, left, right })
@@ -643,13 +740,12 @@ export const setupGSI = (io: Server) => {
 
       lastGSIState = gsiData
 
-      // Build payload for for HUDs
       let hudPayload = gsiData
       const needsCoachFilter = (gsiData as any)?.allplayers && coachSteamIds.size > 0
       const needsSlotRemap = (gsiData as any)?.allplayers && nameToSlot.size > 0
 
       if (needsCoachFilter || needsSlotRemap) {
-        let remapped = { ...(gsiData as any).allplayers }
+        let remapped = { ...(hudPayload as any).allplayers }
 
         // Remove coaches
         if (needsCoachFilter) {
@@ -678,7 +774,7 @@ export const setupGSI = (io: Server) => {
           )
         }
 
-        hudPayload = { ...(gsiData as any), allplayers: remapped }
+        hudPayload = { ...(hudPayload as any), allplayers: remapped }
       }
 
       // Feed raw payload into CSGOGSI so backend listeners fire
