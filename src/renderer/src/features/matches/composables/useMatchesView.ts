@@ -43,7 +43,12 @@ export function useMatchesView() {
   })
 
   const toggleGSIOverwrite = async () => {
-    await saveSettings({ overwriteGSIFromMatch: !settings.value.overwriteGSIFromMatch })
+    await saveSettings({
+      overwriteGSIFromMatch: !settings.value.overwriteGSIFromMatch,
+      gsiPlayerOverlayMode: settings.value.overwriteGSIFromMatch
+        ? false
+        : settings.value.gsiPlayerOverlayMode
+    })
   }
 
   return {

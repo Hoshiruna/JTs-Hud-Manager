@@ -21,6 +21,10 @@ export interface Veto {
   reverseSide?: boolean
   gsiSideOverride?: boolean
   gsiLeftSide?: 'CT' | 'T'
+  gsiPlayerSlots?: {
+    left: number[]
+    right: number[]
+  }
   rounds?: (RoundData | null)[]
   score?: {
     [key: string]: number

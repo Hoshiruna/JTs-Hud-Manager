@@ -120,10 +120,33 @@ const updateSetting = async (updates: Partial<typeof settings.value>) => {
                   :variant="settings.overwriteGSIFromMatch ? 'primary' : 'secondary'"
                   :disabled="isSaving"
                   class="shrink-0"
-                  @click="updateSetting({ overwriteGSIFromMatch: !settings.overwriteGSIFromMatch })"
+                  @click="
+                    updateSetting({
+                      overwriteGSIFromMatch: !settings.overwriteGSIFromMatch,
+                      gsiPlayerOverlayMode: settings.overwriteGSIFromMatch
+                        ? false
+                        : settings.gsiPlayerOverlayMode
+                    })
+                  "
                 >
                   {{ settings.overwriteGSIFromMatch ? 'On' : 'Off' }}
                 </BaseButton>
+              </div>
+
+              <div class="flex items-center justify-between gap-3 mb-4">
+                <div>
+                  <p class="text-sm font-medium text-zinc-200">GSI Player Overlay Mode</p>
+                  <p class="text-xs text-zinc-500 mt-0.5">
+                    Pin teams and players to match sides; side switches only change score and color
+                  </p>
+                </div>
+                <BaseCheckbox
+                  :model-value="settings.gsiPlayerOverlayMode"
+                  :disabled="isSaving || !settings.overwriteGSIFromMatch"
+                  size="md"
+                  class="text-primary shrink-0"
+                  @update:model-value="(value) => updateSetting({ gsiPlayerOverlayMode: value })"
+                />
               </div>
 
               <div class="flex flex-col gap-2">

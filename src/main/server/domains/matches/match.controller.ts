@@ -17,6 +17,7 @@ type HudVeto = Veto & {
 
 type HudMatch = Omit<Match, 'vetos'> & {
   vetos: HudVeto[]
+  gsiPlayerOverlayMode: boolean
 }
 
 const getVetoSides = (
@@ -68,6 +69,7 @@ const toHudMatch = (match: Match | null, enableGsiSideOverride: boolean): HudMat
 
   return {
     ...match,
+    gsiPlayerOverlayMode: false,
     vetos: match.vetos.map((veto) => {
       const fallbackHudReverseSide = Boolean(veto.reverseSide)
       const { leftSide, rightSide } = getVetoSides(
@@ -103,7 +105,12 @@ export const getMatches = async (_req: Request, res: Response) => {
 export const getCurrentMatch = async (_req: Request, res: Response) => {
   try {
     const [match, settings] = await Promise.all([matchService.getCurrentMatch(), getSettings()])
-    res.json(toHudMatch(match, settings.overwriteGSIFromMatch))
+    const hudMatch = toHudMatch(match, settings.overwriteGSIFromMatch)
+    if (hudMatch) {
+      hudMatch.gsiPlayerOverlayMode =
+        settings.overwriteGSIFromMatch && settings.gsiPlayerOverlayMode
+    }
+    res.json(hudMatch)
   } catch (error: any) {
     res.status(404).json({ error: error.message })
   }

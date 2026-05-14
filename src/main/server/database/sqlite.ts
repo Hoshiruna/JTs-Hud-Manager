@@ -166,6 +166,9 @@ async function initializeTables() {
     await dbRun(
       `INSERT OR IGNORE INTO settings (key, value) VALUES ('overwriteGSIFromMatch', 'false')`
     )
+    await dbRun(
+      `INSERT OR IGNORE INTO settings (key, value) VALUES ('gsiPlayerOverlayMode', 'false')`
+    )
     // Hud configs table: stores panel config per hud id
     await dbRun(`
       CREATE TABLE IF NOT EXISTS hud_configs (

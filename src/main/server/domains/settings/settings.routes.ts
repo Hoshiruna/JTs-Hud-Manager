@@ -6,6 +6,7 @@ const router = Router()
 export interface AppSettings {
   autoSwitchSides: boolean
   overwriteGSIFromMatch: boolean
+  gsiPlayerOverlayMode: boolean
   telnetHost: string
   telnetPort: number
 }
@@ -13,6 +14,7 @@ export interface AppSettings {
 const DEFAULT_SETTINGS: AppSettings = {
   autoSwitchSides: true,
   overwriteGSIFromMatch: false,
+  gsiPlayerOverlayMode: false,
   telnetHost: '127.0.0.1',
   telnetPort: 2020
 }
@@ -30,6 +32,10 @@ export const getSettings = async (): Promise<AppSettings> => {
       map.overwriteGSIFromMatch !== undefined
         ? map.overwriteGSIFromMatch === 'true'
         : DEFAULT_SETTINGS.overwriteGSIFromMatch,
+    gsiPlayerOverlayMode:
+      map.gsiPlayerOverlayMode !== undefined
+        ? map.gsiPlayerOverlayMode === 'true'
+        : DEFAULT_SETTINGS.gsiPlayerOverlayMode,
     telnetHost: map.telnetHost ?? DEFAULT_SETTINGS.telnetHost,
     telnetPort: map.telnetPort !== undefined ? Number(map.telnetPort) : DEFAULT_SETTINGS.telnetPort
   }
@@ -47,7 +53,10 @@ router.get('/', async (_req: Request, res: Response) => {
 // PUT /api/settings — update one or more settings keys
 router.put('/', async (req: Request, res: Response) => {
   try {
-    const updates: Partial<AppSettings> = req.body
+    const updates: Partial<AppSettings> = { ...req.body }
+    if (updates.overwriteGSIFromMatch === false) {
+      updates.gsiPlayerOverlayMode = false
+    }
     for (const [key, value] of Object.entries(updates)) {
       await dbRun(
         'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',

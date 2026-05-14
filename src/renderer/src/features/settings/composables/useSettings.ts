@@ -4,6 +4,7 @@ import { API_URL } from '../../../index'
 export interface AppSettings {
   autoSwitchSides: boolean
   overwriteGSIFromMatch: boolean
+  gsiPlayerOverlayMode: boolean
   telnetHost: string
   telnetPort: number
 }
@@ -12,6 +13,7 @@ export function useSettings() {
   const settings = ref<AppSettings>({
     autoSwitchSides: true,
     overwriteGSIFromMatch: false,
+    gsiPlayerOverlayMode: false,
     telnetHost: '127.0.0.1',
     telnetPort: 2020
   })

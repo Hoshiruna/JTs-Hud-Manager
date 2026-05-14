@@ -27,6 +27,7 @@ const CS2_MAPS = [
 ];
 const VETO_TYPES = ['ban', 'pick', 'decider'] as const;
 const SIDES = ['CT', 'T', 'NO'] as const;
+const GSI_PLAYER_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0] as const;
 const SLOT_COUNT = 9;
 
 const makeEmptySlot = () => null as null | any;
@@ -112,6 +113,10 @@ const getDefaultVetoForm = () => ({
   reverseSide: false,
   gsiSideOverride: false,
   gsiLeftSide: 'CT' as 'CT' | 'T',
+  gsiPlayerSlots: {
+    left: [1, 2, 3, 4, 5],
+    right: [6, 7, 8, 9, 0]
+  } as { left: number[]; right: number[] },
   mapEnd: false,
   winner: '' as string,
   score: {} as Record<string, number>
@@ -147,7 +152,10 @@ const saveVetoModal = () => {
     ...vetoForm.value,
     gsiSideOverride: settings.value.overwriteGSIFromMatch
       ? vetoForm.value.gsiSideOverride
-      : false
+      : false,
+    gsiPlayerSlots: settings.value.overwriteGSIFromMatch
+      ? vetoForm.value.gsiPlayerSlots
+      : undefined
   };
   isVetoModalOpen.value = false;
   editingSlot.value = null;
@@ -158,6 +166,35 @@ const setGsiLeftSide = (side: string) => {
 };
 
 const getOppositeSide = (side: string) => (side === 'CT' ? 'T' : 'CT');
+
+const getVisualSlot = (side: 'left' | 'right', index: number) => {
+  if (side === 'left') return index + 1;
+  const slot = index + 6;
+  return slot === 10 ? 0 : slot;
+};
+
+const getSlotOptions = (side: 'left' | 'right', index: number): SelectOption[] => {
+  const current = vetoForm.value.gsiPlayerSlots?.[side]?.[index];
+  const used = new Set([
+    ...(vetoForm.value.gsiPlayerSlots?.left ?? []),
+    ...(vetoForm.value.gsiPlayerSlots?.right ?? [])
+  ].filter(slot => slot !== current));
+
+  return GSI_PLAYER_SLOTS.map(slot => ({
+    value: slot,
+    label: String(slot),
+    disabled: used.has(slot)
+  }));
+};
+
+const setGsiPlayerSlot = (side: 'left' | 'right', index: number, value: string | number | null) => {
+  if (!vetoForm.value.gsiPlayerSlots) {
+    vetoForm.value.gsiPlayerSlots = { left: [1, 2, 3, 4, 5], right: [6, 7, 8, 9, 0] };
+  }
+  const slot = Number(value);
+  if (!Number.isInteger(slot)) return;
+  vetoForm.value.gsiPlayerSlots[side][index] = slot;
+};
 
 const getScore = (score: Record<string, number>, teamId: string) => score?.[teamId] ?? 0;
 const setScore = (teamId: string, val: string) => {
@@ -495,6 +532,60 @@ const vetoTypeColor: Record<string, string> = {
                   : 'bg-amber-500 text-text-main'"
               >
                 {{ getOppositeSide(vetoForm.gsiLeftSide) }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- GSI player slot override -->
+        <div class="rounded-lg border border-border bg-zinc-900/60 p-3 space-y-3">
+          <div>
+            <p class="text-xs font-bold uppercase tracking-wider text-zinc-400">HUD Player Slots</p>
+            <p class="text-xs text-zinc-500 mt-0.5">
+              Map physical GSI slots to visual HUD slots. Raw observer slots and hotkeys stay unchanged.
+            </p>
+          </div>
+
+          <div v-if="!settings.overwriteGSIFromMatch" class="text-xs text-zinc-500">
+            Enable GSI Match Overwrite in Settings to configure this.
+          </div>
+
+          <div v-else class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <label class="block text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                {{ getTeamName(form.left.id) }}
+              </label>
+              <div
+                v-for="(_, index) in vetoForm.gsiPlayerSlots.left"
+                :key="`left-${index}`"
+                class="grid grid-cols-[1fr_72px] items-center gap-2"
+              >
+                <span class="text-xs text-zinc-400">HUD slot {{ getVisualSlot('left', index) }}</span>
+                <BaseSelect
+                  :model-value="vetoForm.gsiPlayerSlots.left[index]"
+                  :options="getSlotOptions('left', index)"
+                  size="sm"
+                  @update:model-value="value => setGsiPlayerSlot('left', index, value)"
+                />
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                {{ getTeamName(form.right.id) }}
+              </label>
+              <div
+                v-for="(_, index) in vetoForm.gsiPlayerSlots.right"
+                :key="`right-${index}`"
+                class="grid grid-cols-[1fr_72px] items-center gap-2"
+              >
+                <span class="text-xs text-zinc-400">HUD slot {{ getVisualSlot('right', index) }}</span>
+                <BaseSelect
+                  :model-value="vetoForm.gsiPlayerSlots.right[index]"
+                  :options="getSlotOptions('right', index)"
+                  size="sm"
+                  @update:model-value="value => setGsiPlayerSlot('right', index, value)"
+                />
               </div>
             </div>
           </div>
